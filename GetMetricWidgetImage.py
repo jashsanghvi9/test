@@ -8,4 +8,4 @@ response = client.get_metric_widget_image(
 )
 
 image = response['MetricWidgetImage']
-#print image
+print image
