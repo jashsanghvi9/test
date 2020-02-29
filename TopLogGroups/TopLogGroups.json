@@ -1,0 +1,234 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Top Logs Groups based on Incoming Bytes",
+    "Metadata": {
+        "AWS::CloudFormation::Interface": {
+            "ParameterGroups": [
+                {
+                    "Label": {
+                        "default": "Details for Lambda Function"
+                    },
+                    "Parameters": [
+                        "pLambdaZipBucket",
+                        "pLambdaZipKey",
+                        "pNotificationEmail",
+                        "pDays",
+                        "pTopLogGroup",
+                        "pScheduler"
+                    ]
+                }
+            ],
+            "ParameterLabels": {
+                "pLambdaZipBucket": {
+                    "default": "S3 Bucket"
+                },
+                "pLambdaZipKey": {
+                    "default": "S3 Key"
+                },
+                "pNotificationEmail": {
+                    "default": "Notification email"
+                },
+                "pDays": {
+                    "default": "Number of days"
+                },
+                "pTopLogGroup": {
+                    "default": "Number of top Log Groups"
+                },
+                "pScheduler": {
+                    "default": "Schedule"
+                }
+            }
+        }
+    },
+    "Parameters": {
+        "pLambdaZipBucket": {
+            "Type": "String",
+            "Description": "Name of the S3 bucket which contains Lambda code",
+            "AllowedPattern": "^[a-zA-Z0-9-\\-_.]{3,63}"
+        },
+        "pLambdaZipKey": {
+            "Type": "String",
+            "Description": "The zip file name and location (e.g. functions/toploggroups.zip)"
+        },
+        "pNotificationEmail": {
+            "Type": "String",
+            "Default": "example@example.com",
+            "Description": "Email address to send top Log Groups",
+            "AllowedPattern": "^[\\w-\\+]+(\\.[\\w]+)*@[\\w-]+(\\.[\\w]+)*(\\.[a-z]{2,})$"
+        },
+        "pDays": {
+            "Type": "Number",
+            "Default": 7,
+            "Description": "Number of days the script should look back for data."
+        },
+        "pTopLogGroup": {
+            "Type": "Number",
+            "Default": 5,
+            "Description": "Number of top Log Groups to be displayed."
+        },
+        "pScheduler": {
+            "Type": "String",
+            "Default": "cron(0 8 1 * ? *)",
+            "Description": "Create a Schedule Expression to trigger the Lambda Function."
+        }
+    },
+    "Resources": {
+        "LambdaRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "RoleName": {
+                    "Fn::Sub": "${AWS::StackName}-LambdaRole"
+                },
+                "Policies": [
+                    {
+                        "PolicyName": {
+                            "Fn::Sub": "${AWS::StackName}-LambdaPolicy"
+                        },
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Sid": "CloudWatchLogsPermissions",
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "logs:CreateLogGroup",
+                                        "logs:CreateLogStream",
+                                        "logs:PutLogEvents"
+                                    ],
+                                    "Resource": "*"
+                                },
+                                {
+                                    "Sid": "LambdaFunctionPermissionsforSNSPublish",
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "sns:Publish"
+                                    ],
+                                    "Resource": {
+                                        "Ref": "NotifyTopicSNS"
+                                    }
+                                },
+                                {
+                                    "Sid": "LambdaFunctionPermissionsforCloudWatch",
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "cloudwatch:ListMetrics",
+                                        "cloudwatch:GetMetricStatistics"
+                                    ],
+                                    "Resource": "*"
+                                }
+                            ]
+                        }
+                    }
+                ],
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": [
+                                    "lambda.amazonaws.com"
+                                ]
+                            },
+                            "Action": [
+                                "sts:AssumeRole"
+                            ]
+                        }
+                    ]
+                }
+            }
+        },
+        "LambdaFunction": {
+            "Type": "AWS::Lambda::Function",
+            "DependsOn": "LambdaRole",
+            "Properties": {
+                "FunctionName": {
+                    "Fn::Sub": "${AWS::StackName}-LambdaFunction"
+                },
+                "Role": {
+                    "Fn::GetAtt": [
+                        "LambdaRole",
+                        "Arn"
+                    ]
+                },
+                "Environment": {
+                    "Variables": {
+                        "sns_topic_arn": {
+                            "Ref": "NotifyTopicSNS"
+                        },
+                        "top": {
+                            "Ref": "pTopLogGroup"
+                        },
+                        "number_of_days": {
+                            "Ref": "pDays"
+                        }
+                    }
+                },
+                "Handler": "index.lambda_handler",
+                "Timeout": 300,
+                "Runtime": "python2.7",
+                "Code": {
+                    "S3Bucket": {
+                        "Ref": "pLambdaZipBucket"
+                    },
+                    "S3Key": {
+                        "Ref": "pLambdaZipKey"
+                    }
+                }
+            }
+        },
+        "ScheduledRule": {
+            "Type": "AWS::Events::Rule",
+            "DependsOn": "LambdaFunction",
+            "Properties": {
+                "ScheduleExpression": {
+                    "Ref": "pScheduler"
+                },
+                "Targets": [
+                    {
+                        "Arn": {
+                            "Fn::GetAtt": [
+                                "LambdaFunction",
+                                "Arn"
+                            ]
+                        },
+                        "Id": "LambdaFunction"
+                    }
+                ]
+            }
+        },
+        "PermissionForEventsToInvokeLambda": {
+            "Type": "AWS::Lambda::Permission",
+            "DependsOn": "LambdaFunction",
+            "Properties": {
+                "Action": "lambda:InvokeFunction",
+                "FunctionName": {
+                    "Fn::GetAtt": [
+                        "LambdaFunction",
+                        "Arn"
+                    ]
+                },
+                "Principal": "events.amazonaws.com",
+                "SourceArn": {
+                    "Fn::GetAtt": [
+                        "ScheduledRule",
+                        "Arn"
+                    ]
+                }
+            }
+        },
+        "NotifyTopicSNS": {
+            "Type": "AWS::SNS::Topic",
+            "Properties": {
+                "Subscription": [
+                    {
+                        "Endpoint": {
+                            "Ref": "pNotificationEmail"
+                        },
+                        "Protocol": "email"
+                    }
+                ]
+            }
+        }
+    }
+}
